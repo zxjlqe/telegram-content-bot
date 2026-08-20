@@ -85,21 +85,56 @@ def main_menu():
     con.close()
 
     rows = []
-    for i in range(0, len(cats), 2):
+    # 3 buttons per row مثل الواجهة المطلوبة
+    for i in range(0, len(cats), 3):
         row = []
-        for c in cats[i:i+2]:
+        for c in cats[i:i+3]:
             row.append(InlineKeyboardButton(c["name"], callback_data=f"cat:{c['id']}"))
         rows.append(row)
 
-    rows.append([InlineKeyboardButton("🔎 البحث", callback_data="search_info")])
+    rows.append([
+        InlineKeyboardButton("🔎 البحث", callback_data="search_info"),
+        InlineKeyboardButton("💬 الدعم", callback_data="support"),
+        InlineKeyboardButton("ℹ️ عن البوت", callback_data="about")
+    ])
     return InlineKeyboardMarkup(rows)
+
+
+def seed_categories():
+    """ينشئ أقسامًا مفيدة أول مرة فقط، ويترك أقسامك الحالية كما هي."""
+    con = db()
+    count = con.execute("SELECT COUNT(*) n FROM categories WHERE parent_id IS NULL").fetchone()["n"]
+    if count == 0:
+        defaults = [
+            "📚 الشروحات",
+            "🐍 Python",
+            "🐧 Termux & Linux",
+            "🛡️ الأمن والحماية",
+            "🧰 الأدوات",
+            "📂 الملفات والمصادر",
+            "🌐 الويب والتطوير",
+            "🤖 الذكاء الاصطناعي",
+            "📱 تطبيقات وموبايل"
+        ]
+        con.executemany("INSERT INTO categories(name) VALUES(?)", [(x,) for x in defaults])
+        con.commit()
+    con.close()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_user(update)
     text = (
-        "✨ <b>مرحبًا بك</b>\n\n"
-        "اختر القسم الذي تريد تصفحه من القائمة بالأسفل 👇"
+        "🌑 <b>الظل الرقمي | SHADOW DIGITAL</b>\n\n"
+        "مرحباً بك في الظل الرقمي 🖤\n\n"
+        "مساحتك الرقمية المتخصصة في التقنية والأدوات الرقمية والمحتوى التقني. "
+        "هنا ستجد الشروحات والملفات والمصادر والأدوات مرتبة في أقسام سهلة وسريعة.\n\n"
+        "🚀 استكشف الأقسام\n"
+        "🧰 جرّب الأدوات\n"
+        "📚 تعلّم من الشروحات\n"
+        "📂 استفد من الملفات والمصادر\n"
+        "💬 تواصل مع الدعم\n\n"
+        "أهلاً بك في <b>الظل الرقمي</b>... حيث تبدأ رحلتك الرقمية. 🌑🔥\n\n"
+        "👇 <b>اختر القسم الذي تريد تصفحه:</b>"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=main_menu())
 
@@ -126,12 +161,13 @@ async def open_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not cat:
         return
 
-    rows = []
+    buttons = []
     for s in subs:
-        rows.append([InlineKeyboardButton("📁 " + s["name"], callback_data=f"cat:{s['id']}")])
+        buttons.append(InlineKeyboardButton("📁 " + s["name"], callback_data=f"cat:{s['id']}"))
     for c in contents:
-        rows.append([InlineKeyboardButton("📄 " + c["title"], callback_data=f"content:{c['id']}")])
+        buttons.append(InlineKeyboardButton("📄 " + c["title"], callback_data=f"content:{c['id']}"))
 
+    rows = [buttons[i:i+3] for i in range(0, len(buttons), 3)]
     back = "main" if cat["parent_id"] is None else f"cat:{cat['parent_id']}"
     rows.append([InlineKeyboardButton("↩️ رجوع", callback_data=back)])
 
@@ -163,7 +199,7 @@ async def open_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     value = item["value"]
 
     if kind == "text":
-        await q.message.reply_text(f"📄 <b>{title}</b>\n\n{value}", parse_mode=ParseMode.HTML)
+        await q.message.reply_text(f"📄 <b>{title}</b>\n\n{escape(value)}", parse_mode=ParseMode.HTML)
     elif kind == "document":
         await q.message.reply_document(document=value, caption=title)
     elif kind == "photo":
@@ -180,6 +216,32 @@ async def open_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("↩️ رجوع للقسم", callback_data=f"cat:{item['category_id']}")]
         ])
+    )
+
+
+async def support_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await q.edit_message_text(
+        "💬 <b>الدعم</b>\n\nإذا واجهتك مشكلة أو عندك اقتراح، تواصل معنا عبر واتساب.\n\nاضغط الزر بالأسفل للتواصل.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("💚 التواصل عبر واتساب", url="https://wa.me/967734647071")],
+            [InlineKeyboardButton("↩️ القائمة الرئيسية", callback_data="main")]
+        ])
+    )
+
+
+async def about_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await q.edit_message_text(
+        "🌑 <b>الظل الرقمي | SHADOW DIGITAL</b>\n\n"
+        "منصة عربية تجمع الشروحات والأدوات والملفات والمصادر التقنية في مكان واحد.\n\n"
+        "⚡ بسيطة • سريعة • منظمة\n\n"
+        "استكشف الأقسام وابدأ رحلتك الرقمية.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ القائمة الرئيسية", callback_data="main")]])
     )
 
 
@@ -439,6 +501,10 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if q.data == "search_info":
         return await search_info(update, context)
+    if q.data == "support":
+        return await support_info(update, context)
+    if q.data == "about":
+        return await about_info(update, context)
     if q.data.startswith(("a:", "ae:", "rename:", "delcat:", "acat:", "delc:")):
         return await admin_callback(update, context)
 
@@ -447,6 +513,7 @@ def main():
     if TOKEN == "PUT_BOT_TOKEN_HERE":
         raise SystemExit("ضع BOT_TOKEN في متغير البيئة قبل التشغيل.")
     init_db()
+    seed_categories()
 
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
