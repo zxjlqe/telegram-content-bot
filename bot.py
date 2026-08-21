@@ -21,6 +21,8 @@ ADMIN_ID = int(os.getenv("ADMIN_IDS", "0"))
 
 DB_NAME = "/data/bot.db"
 
+os.makedirs("/data", exist_ok=True)
+
 # =========================================================
 # قاعدة البيانات
 # =========================================================
@@ -30,8 +32,10 @@ db.row_factory = sqlite3.Row
 
 
 def init_db():
+
     cur = db.cursor()
 
+    # المستخدمين
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -40,6 +44,7 @@ def init_db():
         )
     """)
 
+    # الإعدادات
     cur.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -47,13 +52,26 @@ def init_db():
         )
     """)
 
+    # الأقسام
     cur.execute("""
         CREATE TABLE IF NOT EXISTS categories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL
+            name TEXT NOT NULL,
+            parent_id INTEGER
         )
     """)
 
+    # ترقية قاعدة البيانات القديمة إذا كانت categories موجودة
+    try:
+        cur.execute(
+            "SELECT parent_id FROM categories LIMIT 1"
+        )
+    except sqlite3.OperationalError:
+        cur.execute(
+            "ALTER TABLE categories ADD COLUMN parent_id INTEGER"
+        )
+
+    # المحتوى
     cur.execute("""
         CREATE TABLE IF NOT EXISTS contents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,22 +81,31 @@ def init_db():
         )
     """)
 
+    # الإعدادات الافتراضية
     defaults = {
         "welcome": "أهلاً وسهلاً بك 👋\n\nاختر القسم الذي تريد الدخول إليه:",
-        "support_type": "whatsapp",
         "support_value": ""
     }
 
     for key, value in defaults.items():
+
         cur.execute(
-            "INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",
+            """
+            INSERT OR IGNORE INTO settings(key,value)
+            VALUES(?,?)
+            """,
             (key, value)
         )
 
     db.commit()
 
 
+# =========================================================
+# الإعدادات
+# =========================================================
+
 def get_setting(key):
+
     row = db.execute(
         "SELECT value FROM settings WHERE key=?",
         (key,)
@@ -88,12 +115,16 @@ def get_setting(key):
 
 
 def set_setting(key, value):
-    db.execute("""
+
+    db.execute(
+        """
         INSERT INTO settings(key,value)
         VALUES(?,?)
         ON CONFLICT(key)
         DO UPDATE SET value=excluded.value
-    """, (key, value))
+        """,
+        (key, value)
+    )
 
     db.commit()
 
@@ -103,29 +134,35 @@ def set_setting(key, value):
 # =========================================================
 
 def save_user(user):
+
     if not user:
         return
 
-    db.execute("""
+    db.execute(
+        """
         INSERT OR REPLACE INTO users
         (user_id, username, first_name)
         VALUES (?, ?, ?)
-    """, (
-        user.id,
-        user.username or "",
-        user.first_name or ""
-    ))
+        """,
+        (
+            user.id,
+            user.username or "",
+            user.first_name or ""
+        )
+    )
 
     db.commit()
 
 
 def get_users():
+
     return db.execute(
         "SELECT user_id FROM users"
     ).fetchall()
 
 
 def users_count():
+
     return db.execute(
         "SELECT COUNT(*) AS total FROM users"
     ).fetchone()["total"]
@@ -135,46 +172,290 @@ def users_count():
 # الأقسام
 # =========================================================
 
-def get_categories():
+def get_categories(parent_id=None):
+
+    if parent_id is None:
+
+        return db.execute(
+            """
+            SELECT *
+            FROM categories
+            WHERE parent_id IS NULL
+            ORDER BY id
+            """
+        ).fetchall()
+
     return db.execute(
-        "SELECT * FROM categories ORDER BY id"
+        """
+        SELECT *
+        FROM categories
+        WHERE parent_id=?
+        ORDER BY id
+        """,
+        (parent_id,)
     ).fetchall()
 
 
 def get_category(category_id):
+
     return db.execute(
-        "SELECT * FROM categories WHERE id=?",
+        """
+        SELECT *
+        FROM categories
+        WHERE id=?
+        """,
         (category_id,)
     ).fetchone()
 
 
+def add_category(name, parent_id=None):
+
+    cur = db.cursor()
+
+    cur.execute(
+        """
+        INSERT INTO categories(name,parent_id)
+        VALUES(?,?)
+        """,
+        (name, parent_id)
+    )
+
+    db.commit()
+
+    return cur.lastrowid
+
+
+def delete_category(category_id):
+
+    children = get_categories(category_id)
+
+    for child in children:
+        delete_category(child["id"])
+
+    db.execute(
+        "DELETE FROM contents WHERE category_id=?",
+        (category_id,)
+    )
+
+    db.execute(
+        "DELETE FROM categories WHERE id=?",
+        (category_id,)
+    )
+
+    db.commit()
+
+
+# =========================================================
+# المحتوى
+# =========================================================
+
 def get_contents(category_id):
-    return db.execute("""
+
+    return db.execute(
+        """
         SELECT *
         FROM contents
         WHERE category_id=?
         ORDER BY id
-    """, (category_id,)).fetchall()
+        """,
+        (category_id,)
+    ).fetchall()
+
+
+def get_content(content_id):
+
+    return db.execute(
+        """
+        SELECT *
+        FROM contents
+        WHERE id=?
+        """,
+        (content_id,)
+    ).fetchone()
+
+
+def add_content(category_id, title, body):
+
+    db.execute(
+        """
+        INSERT INTO contents
+        (category_id,title,body)
+        VALUES(?,?,?)
+        """,
+        (
+            category_id,
+            title,
+            body
+        )
+    )
+
+    db.commit()
+
+
+def delete_content(content_id):
+
+    db.execute(
+        "DELETE FROM contents WHERE id=?",
+        (content_id,)
+    )
+
+    db.commit()
 
 
 # =========================================================
-# القوائم
+# زر الرجوع للمستخدم
+# =========================================================
+
+def user_back_button(parent_id):
+
+    if parent_id is None:
+
+        return InlineKeyboardButton(
+            "🔙 الرئيسية",
+            callback_data="home"
+        )
+
+    return InlineKeyboardButton(
+        "🔙 رجوع",
+        callback_data=f"category_{parent_id}"
+    )
+
+
+# =========================================================
+# عرض القسم للمستخدم
+# =========================================================
+
+async def show_category(query, category_id):
+
+    category = get_category(category_id)
+
+    if not category:
+        return
+
+    children = get_categories(category_id)
+    contents = get_contents(category_id)
+
+    buttons = []
+
+    # الأقسام الفرعية
+    for child in children:
+
+        buttons.append([
+            InlineKeyboardButton(
+                f"📁 {child['name']}",
+                callback_data=f"category_{child['id']}"
+            )
+        ])
+
+    # المحتوى الموجود مباشرة داخل القسم
+    for item in contents:
+
+        title = item["title"] or ""
+
+        if title.strip():
+            button_text = f"📄 {title}"
+        else:
+            button_text = "📄 محتوى"
+
+        buttons.append([
+            InlineKeyboardButton(
+                button_text,
+                callback_data=f"content_{item['id']}"
+            )
+        ])
+
+    # إذا القسم فاضي
+    if not buttons:
+
+        buttons.append([
+            InlineKeyboardButton(
+                "لا يوجد محتوى حالياً",
+                callback_data="nothing"
+            )
+        ])
+
+    # زر الرجوع
+    parent_id = category["parent_id"]
+
+    buttons.append([
+        user_back_button(parent_id)
+    ])
+
+    await query.edit_message_text(
+        f"📂 {category['name']}",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+# =========================================================
+# عرض المحتوى
+# =========================================================
+
+async def show_content(query, content_id):
+
+    content = get_content(content_id)
+
+    if not content:
+        return
+
+    category = get_category(
+        content["category_id"]
+    )
+
+    body = content["body"]
+
+    title = content["title"] or ""
+
+    if title.strip():
+
+        text = (
+            f"📌 {title}\n\n"
+            f"{body}"
+        )
+
+    else:
+
+        text = body
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            user_back_button(
+                category["id"]
+            )
+        ]
+    ])
+
+    await query.edit_message_text(
+        text,
+        reply_markup=keyboard
+    )
+
+
+# =========================================================
+# القائمة الرئيسية
 # =========================================================
 
 def main_menu():
+
     buttons = []
 
-    for category in get_categories():
+    categories = get_categories()
+
+    for category in categories:
+
         buttons.append([
             InlineKeyboardButton(
-                category["name"],
+                f"📁 {category['name']}",
                 callback_data=f"category_{category['id']}"
             )
         ])
 
-    support = get_setting("support_value")
+    support = get_setting(
+        "support_value"
+    )
 
     if support:
+
         buttons.append([
             InlineKeyboardButton(
                 "🤝 الدعم",
@@ -185,44 +466,56 @@ def main_menu():
     return InlineKeyboardMarkup(buttons)
 
 
+# =========================================================
+# لوحة التحكم
+# =========================================================
+
 def admin_menu():
+
     return InlineKeyboardMarkup([
+
         [
             InlineKeyboardButton(
                 "👥 عدد المستخدمين",
                 callback_data="admin_users"
             )
         ],
+
         [
             InlineKeyboardButton(
                 "📢 الإذاعة",
                 callback_data="admin_broadcast"
             )
         ],
+
         [
             InlineKeyboardButton(
                 "📝 تعديل رسالة الترحيب",
                 callback_data="admin_welcome"
             )
         ],
+
         [
             InlineKeyboardButton(
                 "🤝 إعدادات الدعم",
                 callback_data="admin_support"
             )
         ],
+
         [
             InlineKeyboardButton(
                 "📂 إدارة الأقسام",
                 callback_data="admin_categories"
             )
         ],
+
         [
             InlineKeyboardButton(
                 "📚 إدارة المحتوى",
                 callback_data="admin_content"
             )
         ],
+
     ])
 
 
@@ -231,11 +524,11 @@ def admin_menu():
 # =========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user:
-        save_user(update.effective_user)
 
-    if not update.message:
-        return
+    if update.effective_user:
+        save_user(
+            update.effective_user
+        )
 
     await update.message.reply_text(
         get_setting("welcome"),
@@ -244,10 +537,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================================================
-# لوحة التحكم
+# ADMIN
 # =========================================================
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     if not update.effective_user:
         return
 
@@ -264,84 +558,30 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================================================
-# الأزرار
+# أزرار البوت
 # =========================================================
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     query = update.callback_query
 
     await query.answer()
 
     data = query.data
 
-    # -----------------------------------------------------
-    # الأقسام للمستخدم
-    # -----------------------------------------------------
+    # =====================================================
+    # لا يوجد شيء
+    # =====================================================
 
-    if data.startswith("category_"):
-        category_id = int(
-            data.replace("category_", "")
-        )
-
-        category = get_category(category_id)
-
-        if not category:
-            return
-
-        contents = get_contents(category_id)
-
-        if not contents:
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "🔙 رجوع",
-                        callback_data="home"
-                    )
-                ]
-            ])
-
-            await query.edit_message_text(
-                "لا يوجد محتوى في هذا القسم حالياً.",
-                reply_markup=keyboard
-            )
-
-            return
-
-        message = ""
-
-        for item in contents:
-            title = item["title"] or ""
-            body = item["body"]
-
-            if title.strip():
-                message += (
-                    f"📌 {title}\n\n"
-                    f"{body}\n\n"
-                )
-            else:
-                message += f"{body}\n\n"
-
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "🔙 رجوع",
-                    callback_data="home"
-                )
-            ]
-        ])
-
-        await query.edit_message_text(
-            message.strip(),
-            reply_markup=keyboard
-        )
-
+    if data == "nothing":
         return
 
-    # -----------------------------------------------------
-    # رجوع
-    # -----------------------------------------------------
+    # =====================================================
+    # الرئيسية
+    # =====================================================
 
     if data == "home":
+
         await query.edit_message_text(
             get_setting("welcome"),
             reply_markup=main_menu()
@@ -349,69 +589,102 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-    # -----------------------------------------------------
-    # الدعم
-    # -----------------------------------------------------
+    # =====================================================
+    # قسم
+    # =====================================================
+
+    if data.startswith("category_"):
+
+        category_id = int(
+            data.replace(
+                "category_",
+                ""
+            )
+        )
+
+        await show_category(
+            query,
+            category_id
+        )
+
+        return
+
+    # =====================================================
+    # محتوى
+    # =====================================================
+
+    if data.startswith("content_"):
+
+        content_id = int(
+            data.replace(
+                "content_",
+                ""
+            )
+        )
+
+        await show_content(
+            query,
+            content_id
+        )
+
+        return
+
+    # =====================================================
+    # الدعم - تيليجرام
+    # =====================================================
 
     if data == "support":
-        support_type = get_setting("support_type")
-        support_value = get_setting("support_value")
 
-        if not support_value:
+        username = get_setting(
+            "support_value"
+        ).strip()
+
+        if not username:
             return
 
-        if support_type == "instagram":
-            if support_value.startswith("http"):
-                url = support_value
-            else:
-                url = (
-                    "https://instagram.com/"
-                    + support_value.replace("@", "")
-                )
+        username_clean = username.replace(
+            "@",
+            ""
+        )
 
-            text = "📸 للتواصل معي عبر إنستجرام:"
-            button_text = "📸 إنستجرام"
+        if username.startswith("http"):
+
+            url = username
 
         else:
-            clean_number = (
-                support_value
-                .replace("+", "")
-                .replace(" ", "")
-                .replace("-", "")
+
+            url = (
+                "https://t.me/"
+                + username_clean
             )
 
-            if support_value.startswith("http"):
-                url = support_value
-            else:
-                url = f"https://wa.me/{clean_number}"
-
-            text = "📱 للتواصل معي عبر واتساب:"
-            button_text = "📱 واتساب"
-
         keyboard = InlineKeyboardMarkup([
+
             [
                 InlineKeyboardButton(
-                    button_text,
+                    "💬 تواصل معي على تيليجرام",
                     url=url
                 )
             ],
+
             [
                 InlineKeyboardButton(
                     "🔙 رجوع",
                     callback_data="home"
                 )
             ]
+
         ])
 
         await query.edit_message_text(
-            text,
+            "🤝 للتواصل مع الدعم:",
             reply_markup=keyboard
         )
 
         return
 
     # =====================================================
-    # لوحة التحكم
+    # حماية لوحة التحكم
     # =====================================================
 
     if not query.from_user:
@@ -420,24 +693,28 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.from_user.id != ADMIN_ID:
         return
 
-    # -----------------------------------------------------
+    # =====================================================
     # عدد المستخدمين
-    # -----------------------------------------------------
+    # =====================================================
 
     if data == "admin_users":
+
         await query.edit_message_text(
+
             "👥 إحصائيات البوت\n\n"
             f"👤 عدد مستخدمي البوت: {users_count()}",
+
             reply_markup=admin_menu()
         )
 
         return
 
-    # -----------------------------------------------------
+    # =====================================================
     # تعديل الترحيب
-    # -----------------------------------------------------
+    # =====================================================
 
     if data == "admin_welcome":
+
         context.user_data["action"] = "welcome"
 
         await query.edit_message_text(
@@ -446,11 +723,12 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-    # -----------------------------------------------------
+    # =====================================================
     # الإذاعة
-    # -----------------------------------------------------
+    # =====================================================
 
     if data == "admin_broadcast":
+
         context.user_data["action"] = "broadcast"
 
         await query.edit_message_text(
@@ -459,81 +737,78 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-    # -----------------------------------------------------
+    # =====================================================
     # إعدادات الدعم
-    # -----------------------------------------------------
+    # =====================================================
 
     if data == "admin_support":
+
         keyboard = InlineKeyboardMarkup([
+
             [
                 InlineKeyboardButton(
-                    "📱 واتساب",
-                    callback_data="support_whatsapp"
+                    "💬 حساب تيليجرام للدعم",
+                    callback_data="support_telegram"
                 )
             ],
-            [
-                InlineKeyboardButton(
-                    "📸 إنستجرام",
-                    callback_data="support_instagram"
-                )
-            ],
+
             [
                 InlineKeyboardButton(
                     "❌ تعطيل الدعم",
                     callback_data="support_disable"
                 )
             ],
+
             [
                 InlineKeyboardButton(
                     "🔙 رجوع",
                     callback_data="admin_back"
                 )
             ]
+
         ])
 
         await query.edit_message_text(
-            "🤝 إعدادات الدعم\n\nاختر طريقة التواصل:",
+            "🤝 إعدادات الدعم\n\n"
+            "اختر إعداد الدعم:",
             reply_markup=keyboard
         )
 
         return
 
-    # -----------------------------------------------------
-    # واتساب
-    # -----------------------------------------------------
+    # =====================================================
+    # دعم تيليجرام
+    # =====================================================
 
-    if data == "support_whatsapp":
-        context.user_data["action"] = "support_whatsapp"
+    if data == "support_telegram":
+
+        context.user_data[
+            "action"
+        ] = "support_telegram"
 
         await query.edit_message_text(
-            "📱 أرسل رقم الواتساب مع مفتاح الدولة.\n\n"
+
+            "💬 أرسل يوزر حسابك في تيليجرام.\n\n"
+
             "مثال:\n"
-            "9677XXXXXXXX"
+            "@username\n\n"
+
+            "أو أرسل رابط حسابك مباشرة."
+
         )
 
         return
 
-    # -----------------------------------------------------
-    # إنستجرام
-    # -----------------------------------------------------
-
-    if data == "support_instagram":
-        context.user_data["action"] = "support_instagram"
-
-        await query.edit_message_text(
-            "📸 أرسل يوزر الإنستجرام أو رابط حسابك.\n\n"
-            "مثال:\n"
-            "@username"
-        )
-
-        return
-
-    # -----------------------------------------------------
+    # =====================================================
     # تعطيل الدعم
-    # -----------------------------------------------------
+    # =====================================================
 
     if data == "support_disable":
-        set_setting("support_value", "")
+
+        set_setting(
+            "support_value",
+            ""
+        )
 
         await query.edit_message_text(
             "✅ تم تعطيل زر الدعم.",
@@ -542,94 +817,192 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-    # -----------------------------------------------------
+    # =====================================================
     # إدارة الأقسام
-    # -----------------------------------------------------
+    # =====================================================
 
     if data == "admin_categories":
-        await categories_admin(query)
-        return
 
-    # -----------------------------------------------------
-    # إضافة قسم
-    # -----------------------------------------------------
-
-    if data == "add_category":
-        context.user_data["action"] = "add_category"
-
-        await query.edit_message_text(
-            "📂 أرسل اسم القسم الجديد:"
+        await admin_categories_root(
+            query
         )
 
         return
 
-    # -----------------------------------------------------
+    # =====================================================
+    # فتح قسم في لوحة التحكم
+    # =====================================================
+
+    if data.startswith("admin_cat_"):
+
+        category_id = int(
+            data.replace(
+                "admin_cat_",
+                ""
+            )
+        )
+
+        await admin_category(
+            query,
+            category_id
+        )
+
+        return
+
+    # =====================================================
+    # إضافة قسم فرعي
+    # =====================================================
+
+    if data.startswith("add_subcategory_"):
+
+        parent_id = int(
+            data.replace(
+                "add_subcategory_",
+                ""
+            )
+        )
+
+        context.user_data[
+            "action"
+        ] = f"add_category_{parent_id}"
+
+        await query.edit_message_text(
+            "📂 أرسل اسم القسم الفرعي الجديد:"
+        )
+
+        return
+
+    # =====================================================
+    # إضافة قسم رئيسي
+    # =====================================================
+
+    if data == "add_root_category":
+
+        context.user_data[
+            "action"
+        ] = "add_category_root"
+
+        await query.edit_message_text(
+            "📂 أرسل اسم القسم الرئيسي الجديد:"
+        )
+
+        return
+
+    # =====================================================
     # حذف قسم
-    # -----------------------------------------------------
+    # =====================================================
 
     if data.startswith("delete_category_"):
+
         category_id = int(
-            data.replace("delete_category_", "")
+            data.replace(
+                "delete_category_",
+                ""
+            )
         )
 
-        db.execute(
-            "DELETE FROM contents WHERE category_id=?",
-            (category_id,)
+        delete_category(
+            category_id
         )
 
-        db.execute(
-            "DELETE FROM categories WHERE id=?",
-            (category_id,)
+        await admin_categories_root(
+            query
         )
-
-        db.commit()
-
-        await categories_admin(query)
 
         return
 
-    # -----------------------------------------------------
+    # =====================================================
     # إدارة المحتوى
-    # -----------------------------------------------------
+    # =====================================================
 
     if data == "admin_content":
-        await content_admin(query)
+
+        await admin_content_root(
+            query
+        )
+
         return
 
-    # -----------------------------------------------------
-    # إضافة محتوى
-    # -----------------------------------------------------
+    # =====================================================
+    # إضافة محتوى داخل قسم
+    # =====================================================
 
     if data.startswith("add_content_"):
+
         category_id = int(
-            data.replace("add_content_", "")
+            data.replace(
+                "add_content_",
+                ""
+            )
         )
 
-        context.user_data["action"] = (
-            f"add_content_{category_id}"
-        )
+        context.user_data[
+            "action"
+        ] = f"add_content_{category_id}"
 
         await query.edit_message_text(
-            "📚 أرسل المحتوى الآن.\n\n"
-            "إذا تريد عنوان:\n"
-            "السطر الأول يكون العنوان\n"
-            "والأسطر التي بعده تكون المحتوى.\n\n"
+
+            "📄 أرسل المحتوى الآن.\n\n"
+
+            "إذا تريد عنوانًا:\n"
+            "السطر الأول = العنوان\n"
+            "والأسطر التالية = المحتوى.\n\n"
+
             "مثال:\n"
-            "ثغرات فنش\n"
-            "هنا تكتب الشرح كامل...\n\n"
-            "وإذا ما تريد عنوان، أرسل المحتوى مباشرة."
+            "بنود الحظر\n"
+            "هنا تكتب المحتوى كاملًا...\n\n"
+
+            "وإذا لا تريد عنوانًا، أرسل المحتوى مباشرة."
+
         )
 
         return
 
-    # -----------------------------------------------------
+    # =====================================================
+    # حذف محتوى
+    # =====================================================
+
+    if data.startswith("delete_content_"):
+
+        content_id = int(
+            data.replace(
+                "delete_content_",
+                ""
+            )
+        )
+
+        content = get_content(
+            content_id
+        )
+
+        if content:
+
+            category_id = content[
+                "category_id"
+            ]
+
+            delete_content(
+                content_id
+            )
+
+            await admin_category(
+                query,
+                category_id
+            )
+
+        return
+
+    # =====================================================
     # رجوع لوحة التحكم
-    # -----------------------------------------------------
+    # =====================================================
 
     if data == "admin_back":
+
         await query.edit_message_text(
+
             "🛠️ لوحة التحكم\n\n"
             f"👥 عدد مستخدمي البوت: {users_count()}",
+
             reply_markup=admin_menu()
         )
 
@@ -637,42 +1010,167 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================================================
-# إدارة الأقسام
+# لوحة إدارة الأقسام الرئيسية
 # =========================================================
 
-async def categories_admin(query):
-    keyboard = []
+async def admin_categories_root(query):
 
-    keyboard.append([
+    buttons = []
+
+    buttons.append([
+
         InlineKeyboardButton(
-            "➕ إضافة قسم",
-            callback_data="add_category"
+            "➕ إضافة قسم رئيسي",
+            callback_data="add_root_category"
         )
+
     ])
 
-    for category in get_categories():
-        keyboard.append([
+    categories = get_categories()
+
+    for category in categories:
+
+        buttons.append([
+
             InlineKeyboardButton(
                 f"📂 {category['name']}",
-                callback_data=f"add_content_{category['id']}"
-            ),
-            InlineKeyboardButton(
-                "🗑️",
-                callback_data=f"delete_category_{category['id']}"
+                callback_data=f"admin_cat_{category['id']}"
             )
+
         ])
 
-    keyboard.append([
+    buttons.append([
+
         InlineKeyboardButton(
             "🔙 رجوع",
             callback_data="admin_back"
         )
+
     ])
 
     await query.edit_message_text(
+
         "📂 إدارة الأقسام\n\n"
-        "اضغط على اسم القسم لإضافة محتوى داخله.",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "هنا تستطيع بناء الأقسام بالشكل الذي تريده.",
+
+        reply_markup=InlineKeyboardMarkup(
+            buttons
+        )
+    )
+
+
+# =========================================================
+# إدارة قسم معين
+# =========================================================
+
+async def admin_category(query, category_id):
+
+    category = get_category(
+        category_id
+    )
+
+    if not category:
+        return
+
+    buttons = []
+
+    # إضافة قسم فرعي
+    buttons.append([
+
+        InlineKeyboardButton(
+            "➕ إضافة قسم فرعي",
+            callback_data=f"add_subcategory_{category_id}"
+        )
+
+    ])
+
+    # إضافة محتوى مباشر
+    buttons.append([
+
+        InlineKeyboardButton(
+            "📄 إضافة محتوى هنا",
+            callback_data=f"add_content_{category_id}"
+        )
+
+    ])
+
+    # الأقسام الفرعية
+    children = get_categories(
+        category_id
+    )
+
+    for child in children:
+
+        buttons.append([
+
+            InlineKeyboardButton(
+                f"📁 {child['name']}",
+                callback_data=f"admin_cat_{child['id']}"
+            ),
+
+            InlineKeyboardButton(
+                "🗑️",
+                callback_data=f"delete_category_{child['id']}"
+            )
+
+        ])
+
+    # المحتوى المباشر
+    contents = get_contents(
+        category_id
+    )
+
+    for item in contents:
+
+        title = item["title"] or "محتوى"
+
+        buttons.append([
+
+            InlineKeyboardButton(
+                f"📄 {title}",
+                callback_data=f"delete_content_{item['id']}"
+            )
+
+        ])
+
+    # حذف القسم الحالي
+    buttons.append([
+
+        InlineKeyboardButton(
+            "🗑️ حذف هذا القسم",
+            callback_data=f"delete_category_{category_id}"
+        )
+
+    ])
+
+    # رجوع
+    parent_id = category["parent_id"]
+
+    if parent_id is None:
+
+        back = "admin_categories"
+
+    else:
+
+        back = f"admin_cat_{parent_id}"
+
+    buttons.append([
+
+        InlineKeyboardButton(
+            "🔙 رجوع",
+            callback_data=back
+        )
+
+    ])
+
+    await query.edit_message_text(
+
+        f"📂 {category['name']}\n\n"
+        "يمكنك هنا إضافة أقسام فرعية أو محتوى مباشرة.",
+
+        reply_markup=InlineKeyboardMarkup(
+            buttons
+        )
     )
 
 
@@ -680,32 +1178,40 @@ async def categories_admin(query):
 # إدارة المحتوى
 # =========================================================
 
-async def content_admin(query):
-    keyboard = []
+async def admin_content_root(query):
 
-    for category in get_categories():
-        count = len(
-            get_contents(category["id"])
-        )
+    categories = get_categories()
 
-        keyboard.append([
+    buttons = []
+
+    for category in categories:
+
+        buttons.append([
+
             InlineKeyboardButton(
-                f"📂 {category['name']} ({count})",
-                callback_data=f"add_content_{category['id']}"
+                f"📂 {category['name']}",
+                callback_data=f"admin_cat_{category['id']}"
             )
+
         ])
 
-    keyboard.append([
+    buttons.append([
+
         InlineKeyboardButton(
             "🔙 رجوع",
             callback_data="admin_back"
         )
+
     ])
 
     await query.edit_message_text(
+
         "📚 إدارة المحتوى\n\n"
-        "اختر القسم الذي تريد إضافة المحتوى إليه:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "اختر القسم الذي تريد إضافة المحتوى إليه.",
+
+        reply_markup=InlineKeyboardMarkup(
+            buttons
+        )
     )
 
 
@@ -714,6 +1220,7 @@ async def content_admin(query):
 # =========================================================
 
 async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     if not update.effective_user:
         return
 
@@ -723,7 +1230,9 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
 
-    action = context.user_data.get("action")
+    action = context.user_data.get(
+        "action"
+    )
 
     if not action:
         return
@@ -733,11 +1242,12 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         return
 
-    # -----------------------------------------------------
-    # رسالة الترحيب
-    # -----------------------------------------------------
+    # =====================================================
+    # الترحيب
+    # =====================================================
 
     if action == "welcome":
+
         set_setting(
             "welcome",
             text
@@ -752,15 +1262,11 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-    # -----------------------------------------------------
-    # الدعم واتساب
-    # -----------------------------------------------------
+    # =====================================================
+    # دعم تيليجرام
+    # =====================================================
 
-    if action == "support_whatsapp":
-        set_setting(
-            "support_type",
-            "whatsapp"
-        )
+    if action == "support_telegram":
 
         set_setting(
             "support_value",
@@ -770,106 +1276,119 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
 
         await update.message.reply_text(
-            "✅ تم حفظ رقم الواتساب.\n\n"
-            "سيظهر للمستخدمين زر الدعم.",
+
+            "✅ تم حفظ حساب الدعم في تيليجرام.\n\n"
+            "سيظهر زر الدعم للمستخدمين.",
+
             reply_markup=admin_menu()
         )
 
         return
 
-    # -----------------------------------------------------
-    # الدعم إنستجرام
-    # -----------------------------------------------------
+    # =====================================================
+    # إضافة قسم رئيسي
+    # =====================================================
 
-    if action == "support_instagram":
-        set_setting(
-            "support_type",
-            "instagram"
-        )
+    if action == "add_category_root":
 
-        set_setting(
-            "support_value",
-            text.strip()
+        add_category(
+            text.strip(),
+            None
         )
 
         context.user_data.clear()
 
         await update.message.reply_text(
-            "✅ تم حفظ حساب الإنستجرام.",
+            "✅ تم إضافة القسم الرئيسي.",
             reply_markup=admin_menu()
         )
 
         return
 
-    # -----------------------------------------------------
-    # إضافة قسم
-    # -----------------------------------------------------
+    # =====================================================
+    # إضافة قسم فرعي
+    # =====================================================
 
-    if action == "add_category":
-        db.execute(
-            "INSERT INTO categories(name) VALUES(?)",
-            (text.strip(),)
+    if action.startswith(
+        "add_category_"
+    ):
+
+        parent_id = int(
+            action.replace(
+                "add_category_",
+                ""
+            )
         )
 
-        db.commit()
+        add_category(
+            text.strip(),
+            parent_id
+        )
 
         context.user_data.clear()
 
         await update.message.reply_text(
-            "✅ تم إضافة القسم بنجاح.",
+            "✅ تم إضافة القسم الفرعي بنجاح.",
             reply_markup=admin_menu()
         )
 
         return
 
-    # -----------------------------------------------------
+    # =====================================================
     # إضافة محتوى
-    # -----------------------------------------------------
+    # =====================================================
 
-    if action.startswith("add_content_"):
+    if action.startswith(
+        "add_content_"
+    ):
+
         category_id = int(
-            action.replace("add_content_", "")
+            action.replace(
+                "add_content_",
+                ""
+            )
         )
 
         lines = text.splitlines()
 
         if len(lines) >= 2:
+
             title = lines[0].strip()
 
             body = "\n".join(
                 lines[1:]
             ).strip()
+
         else:
+
             title = ""
+
             body = text.strip()
 
-        db.execute("""
-            INSERT INTO contents
-            (category_id,title,body)
-            VALUES(?,?,?)
-        """, (
+        add_content(
             category_id,
             title,
             body
-        ))
-
-        db.commit()
+        )
 
         context.user_data.clear()
 
         await update.message.reply_text(
+
             "✅ تم حفظ المحتوى.\n\n"
-            "المستخدم سيظهر له المحتوى مباشرة عند ضغط القسم.",
+            "سيظهر داخل القسم الذي اخترته.",
+
             reply_markup=admin_menu()
         )
 
         return
 
-    # -----------------------------------------------------
+    # =====================================================
     # الإذاعة
-    # -----------------------------------------------------
+    # =====================================================
 
     if action == "broadcast":
+
         context.user_data.clear()
 
         users = get_users()
@@ -878,12 +1397,16 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         failed = 0
 
         await update.message.reply_text(
-            f"📢 بدأت الإذاعة...\n\n"
+
+            "📢 بدأت الإذاعة...\n\n"
             f"👥 المستهدفون: {len(users)}"
+
         )
 
         for user in users:
+
             try:
+
                 await context.bot.send_message(
                     chat_id=user["user_id"],
                     text=text
@@ -892,15 +1415,21 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 sent += 1
 
             except Exception:
+
                 failed += 1
 
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(
+                0.05
+            )
 
         await update.message.reply_text(
+
             "✅ انتهت الإذاعة.\n\n"
+
             f"📨 تم الإرسال: {sent}\n"
             f"❌ فشل الإرسال: {failed}\n"
             f"👥 الإجمالي: {len(users)}",
+
             reply_markup=admin_menu()
         )
 
@@ -912,18 +1441,18 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 def main():
+
     if not BOT_TOKEN:
+
         raise RuntimeError(
-            "BOT_TOKEN غير موجود في متغيرات البيئة."
+            "BOT_TOKEN غير موجود في Deployka."
         )
 
     if ADMIN_ID == 0:
-        raise RuntimeError(
-            "ADMIN_IDS غير موجود في متغيرات البيئة."
-        )
 
-    # التأكد من وجود مجلد البيانات
-    os.makedirs("/data", exist_ok=True)
+        raise RuntimeError(
+            "ADMIN_IDS غير موجود في Deployka."
+        )
 
     init_db()
 
@@ -958,7 +1487,9 @@ def main():
         )
     )
 
-    print("BOT IS RUNNING...")
+    print(
+        "BOT IS RUNNING..."
+    )
 
     app.run_polling(
         drop_pending_updates=True
@@ -966,4 +1497,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
