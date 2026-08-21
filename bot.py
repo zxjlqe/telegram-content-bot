@@ -1,5 +1,7 @@
 import sqlite3
 import asyncio
+import os
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -14,10 +16,10 @@ from telegram.ext import (
 # إعدادات البوت
 # =========================================================
 
-BOT_TOKEN = "ضع_توكن_البوت_هنا"
-ADMIN_ID = 123456789  # ضع آيدي حسابك هنا
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+ADMIN_ID = int(os.getenv("ADMIN_IDS", "0"))
 
-DB_NAME = "bot.db"
+DB_NAME = "/data/bot.db"
 
 # =========================================================
 # قاعدة البيانات
@@ -61,7 +63,6 @@ def init_db():
         )
     """)
 
-    # الإعدادات الافتراضية
     defaults = {
         "welcome": "أهلاً وسهلاً بك 👋\n\nاختر القسم الذي تريد الدخول إليه:",
         "support_type": "whatsapp",
@@ -102,6 +103,9 @@ def set_setting(key, value):
 # =========================================================
 
 def save_user(user):
+    if not user:
+        return
+
     db.execute("""
         INSERT OR REPLACE INTO users
         (user_id, username, first_name)
@@ -158,11 +162,9 @@ def get_contents(category_id):
 # =========================================================
 
 def main_menu():
-
     buttons = []
 
     for category in get_categories():
-
         buttons.append([
             InlineKeyboardButton(
                 category["name"],
@@ -170,7 +172,6 @@ def main_menu():
             )
         ])
 
-    # زر الدعم يظهر فقط إذا تم وضع رابط/رقم
     support = get_setting("support_value")
 
     if support:
@@ -185,51 +186,43 @@ def main_menu():
 
 
 def admin_menu():
-
     return InlineKeyboardMarkup([
-
         [
             InlineKeyboardButton(
                 "👥 عدد المستخدمين",
                 callback_data="admin_users"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "📢 الإذاعة",
                 callback_data="admin_broadcast"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "📝 تعديل رسالة الترحيب",
                 callback_data="admin_welcome"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "🤝 إعدادات الدعم",
                 callback_data="admin_support"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "📂 إدارة الأقسام",
                 callback_data="admin_categories"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "📚 إدارة المحتوى",
                 callback_data="admin_content"
             )
         ],
-
     ])
 
 
@@ -238,8 +231,11 @@ def admin_menu():
 # =========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user:
+        save_user(update.effective_user)
 
-    save_user(update.effective_user)
+    if not update.message:
+        return
 
     await update.message.reply_text(
         get_setting("welcome"),
@@ -252,6 +248,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_user:
+        return
 
     if update.effective_user.id != ADMIN_ID:
         return
@@ -270,7 +268,6 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     query = update.callback_query
 
     await query.answer()
@@ -282,7 +279,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data.startswith("category_"):
-
         category_id = int(
             data.replace("category_", "")
         )
@@ -295,7 +291,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         contents = get_contents(category_id)
 
         if not contents:
-
             keyboard = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton(
@@ -312,31 +307,19 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             return
 
-        # -------------------------------------------------
-        # هنا النقطة المهمة:
-        # المستخدم يرى المحتوى مباشرة
-        # بدون كلمة "نص"
-        # -------------------------------------------------
-
         message = ""
 
         for item in contents:
-
             title = item["title"] or ""
             body = item["body"]
 
             if title.strip():
-
                 message += (
                     f"📌 {title}\n\n"
                     f"{body}\n\n"
                 )
-
             else:
-
-                message += (
-                    f"{body}\n\n"
-                )
+                message += f"{body}\n\n"
 
         keyboard = InlineKeyboardMarkup([
             [
@@ -359,7 +342,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data == "home":
-
         await query.edit_message_text(
             get_setting("welcome"),
             reply_markup=main_menu()
@@ -372,7 +354,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data == "support":
-
         support_type = get_setting("support_type")
         support_value = get_setting("support_value")
 
@@ -380,7 +361,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if support_type == "instagram":
-
             if support_value.startswith("http"):
                 url = support_value
             else:
@@ -390,11 +370,9 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
 
             text = "📸 للتواصل معي عبر إنستجرام:"
-
             button_text = "📸 إنستجرام"
 
         else:
-
             clean_number = (
                 support_value
                 .replace("+", "")
@@ -408,25 +386,21 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 url = f"https://wa.me/{clean_number}"
 
             text = "📱 للتواصل معي عبر واتساب:"
-
             button_text = "📱 واتساب"
 
         keyboard = InlineKeyboardMarkup([
-
             [
                 InlineKeyboardButton(
                     button_text,
                     url=url
                 )
             ],
-
             [
                 InlineKeyboardButton(
                     "🔙 رجوع",
                     callback_data="home"
                 )
             ]
-
         ])
 
         await query.edit_message_text(
@@ -437,10 +411,13 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # =====================================================
-    # من هنا لوحة التحكم
+    # لوحة التحكم
     # =====================================================
 
-    if update.effective_user.id != ADMIN_ID:
+    if not query.from_user:
+        return
+
+    if query.from_user.id != ADMIN_ID:
         return
 
     # -----------------------------------------------------
@@ -448,12 +425,9 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data == "admin_users":
-
         await query.edit_message_text(
-
             "👥 إحصائيات البوت\n\n"
             f"👤 عدد مستخدمي البوت: {users_count()}",
-
             reply_markup=admin_menu()
         )
 
@@ -464,7 +438,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data == "admin_welcome":
-
         context.user_data["action"] = "welcome"
 
         await query.edit_message_text(
@@ -478,7 +451,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data == "admin_broadcast":
-
         context.user_data["action"] = "broadcast"
 
         await query.edit_message_text(
@@ -492,37 +464,31 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data == "admin_support":
-
         keyboard = InlineKeyboardMarkup([
-
             [
                 InlineKeyboardButton(
                     "📱 واتساب",
                     callback_data="support_whatsapp"
                 )
             ],
-
             [
                 InlineKeyboardButton(
                     "📸 إنستجرام",
                     callback_data="support_instagram"
                 )
             ],
-
             [
                 InlineKeyboardButton(
                     "❌ تعطيل الدعم",
                     callback_data="support_disable"
                 )
             ],
-
             [
                 InlineKeyboardButton(
                     "🔙 رجوع",
                     callback_data="admin_back"
                 )
             ]
-
         ])
 
         await query.edit_message_text(
@@ -537,7 +503,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data == "support_whatsapp":
-
         context.user_data["action"] = "support_whatsapp"
 
         await query.edit_message_text(
@@ -553,7 +518,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data == "support_instagram":
-
         context.user_data["action"] = "support_instagram"
 
         await query.edit_message_text(
@@ -569,7 +533,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data == "support_disable":
-
         set_setting("support_value", "")
 
         await query.edit_message_text(
@@ -584,9 +547,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data == "admin_categories":
-
         await categories_admin(query)
-
         return
 
     # -----------------------------------------------------
@@ -594,7 +555,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data == "add_category":
-
         context.user_data["action"] = "add_category"
 
         await query.edit_message_text(
@@ -608,7 +568,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data.startswith("delete_category_"):
-
         category_id = int(
             data.replace("delete_category_", "")
         )
@@ -634,9 +593,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data == "admin_content":
-
         await content_admin(query)
-
         return
 
     # -----------------------------------------------------
@@ -644,7 +601,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data.startswith("add_content_"):
-
         category_id = int(
             data.replace("add_content_", "")
         )
@@ -654,19 +610,14 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         await query.edit_message_text(
-
             "📚 أرسل المحتوى الآن.\n\n"
-
             "إذا تريد عنوان:\n"
             "السطر الأول يكون العنوان\n"
             "والأسطر التي بعده تكون المحتوى.\n\n"
-
             "مثال:\n"
             "ثغرات فنش\n"
             "هنا تكتب الشرح كامل...\n\n"
-
             "وإذا ما تريد عنوان، أرسل المحتوى مباشرة."
-
         )
 
         return
@@ -676,12 +627,9 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if data == "admin_back":
-
         await query.edit_message_text(
-
             "🛠️ لوحة التحكم\n\n"
             f"👥 عدد مستخدمي البوت: {users_count()}",
-
             reply_markup=admin_menu()
         )
 
@@ -693,7 +641,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 async def categories_admin(query):
-
     keyboard = []
 
     keyboard.append([
@@ -704,19 +651,15 @@ async def categories_admin(query):
     ])
 
     for category in get_categories():
-
         keyboard.append([
-
             InlineKeyboardButton(
                 f"📂 {category['name']}",
                 callback_data=f"add_content_{category['id']}"
             ),
-
             InlineKeyboardButton(
                 "🗑️",
                 callback_data=f"delete_category_{category['id']}"
             )
-
         ])
 
     keyboard.append([
@@ -727,10 +670,8 @@ async def categories_admin(query):
     ])
 
     await query.edit_message_text(
-
         "📂 إدارة الأقسام\n\n"
         "اضغط على اسم القسم لإضافة محتوى داخله.",
-
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -740,22 +681,18 @@ async def categories_admin(query):
 # =========================================================
 
 async def content_admin(query):
-
     keyboard = []
 
     for category in get_categories():
-
         count = len(
             get_contents(category["id"])
         )
 
         keyboard.append([
-
             InlineKeyboardButton(
                 f"📂 {category['name']} ({count})",
                 callback_data=f"add_content_{category['id']}"
             )
-
         ])
 
     keyboard.append([
@@ -777,8 +714,13 @@ async def content_admin(query):
 # =========================================================
 
 async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_user:
+        return
 
     if update.effective_user.id != ADMIN_ID:
+        return
+
+    if not update.message:
         return
 
     action = context.user_data.get("action")
@@ -788,12 +730,14 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
 
+    if not text:
+        return
+
     # -----------------------------------------------------
     # رسالة الترحيب
     # -----------------------------------------------------
 
     if action == "welcome":
-
         set_setting(
             "welcome",
             text
@@ -813,7 +757,6 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if action == "support_whatsapp":
-
         set_setting(
             "support_type",
             "whatsapp"
@@ -839,7 +782,6 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if action == "support_instagram":
-
         set_setting(
             "support_type",
             "instagram"
@@ -864,7 +806,6 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if action == "add_category":
-
         db.execute(
             "INSERT INTO categories(name) VALUES(?)",
             (text.strip(),)
@@ -886,7 +827,6 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if action.startswith("add_content_"):
-
         category_id = int(
             action.replace("add_content_", "")
         )
@@ -894,17 +834,13 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = text.splitlines()
 
         if len(lines) >= 2:
-
             title = lines[0].strip()
 
             body = "\n".join(
                 lines[1:]
             ).strip()
-
         else:
-
             title = ""
-
             body = text.strip()
 
         db.execute("""
@@ -934,7 +870,6 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -----------------------------------------------------
 
     if action == "broadcast":
-
         context.user_data.clear()
 
         users = get_users()
@@ -948,9 +883,7 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         for user in users:
-
             try:
-
                 await context.bot.send_message(
                     chat_id=user["user_id"],
                     text=text
@@ -959,19 +892,15 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 sent += 1
 
             except Exception:
-
                 failed += 1
 
             await asyncio.sleep(0.05)
 
         await update.message.reply_text(
-
             "✅ انتهت الإذاعة.\n\n"
-
             f"📨 تم الإرسال: {sent}\n"
             f"❌ فشل الإرسال: {failed}\n"
             f"👥 الإجمالي: {len(users)}",
-
             reply_markup=admin_menu()
         )
 
@@ -983,6 +912,18 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 def main():
+    if not BOT_TOKEN:
+        raise RuntimeError(
+            "BOT_TOKEN غير موجود في متغيرات البيئة."
+        )
+
+    if ADMIN_ID == 0:
+        raise RuntimeError(
+            "ADMIN_IDS غير موجود في متغيرات البيئة."
+        )
+
+    # التأكد من وجود مجلد البيانات
+    os.makedirs("/data", exist_ok=True)
 
     init_db()
 
